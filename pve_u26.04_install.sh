@@ -18,7 +18,7 @@ TMP_ERR="$(mktemp)"
 trap 'rm -f "$TMP_ERR"' EXIT
 
 IMG_DIR="" IMG_PATH="" SNIP_STORE="" SNIP_DIR="" YAML_NAME=""
-VMID="" CPUTYPE="host" CORES="2" MEMORY="2048" IPADDR="" SUBNETBIT="24"
+VMID="" VMNAME="" CPUTYPE="host" CORES="2" MEMORY="2048" IPADDR="" SUBNETBIT="24"
 GATEWAY="" BRIDGE="" DISKSIZE="32" DISKAREA="" ROOTPW=""
 
 # ---------------------------------------------------------------- 로그
@@ -109,6 +109,10 @@ pick_from_list() {  # title, text, 항목들(개행 구분) -> 선택값
 validate_input() {
     local msg=""
     [[ "$VMID"      =~ ^[0-9]+$ ]] || msg+="VMID 는 숫자여야 합니다.\n"
+    # Proxmox 의 VM Name 은 DNS 이름 규칙(영문/숫자/'-'/'.', 양끝은 영문·숫자)을 따른다.
+    [[ "$VMNAME" =~ ^[a-zA-Z0-9]([a-zA-Z0-9.-]*[a-zA-Z0-9])?$ ]] \
+        || msg+="VM Name 은 영문/숫자/'-'/'.' 만 쓸 수 있고 영문·숫자로 시작·끝나야 합니다.\n"
+    (( ${#VMNAME} <= 63 )) || msg+="VM Name 은 63자 이하여야 합니다.\n"
     [[ "$CORES"     =~ ^[0-9]+$ ]] || msg+="Cores 는 숫자여야 합니다.\n"
     [[ "$MEMORY"    =~ ^[0-9]+$ ]] || msg+="Memory 는 숫자(MiB)여야 합니다.\n"
     [[ "$DISKSIZE"  =~ ^[0-9]+$ ]] || msg+="Disk Size 는 숫자(GiB)여야 합니다.\n"
@@ -129,45 +133,51 @@ validate_input() {
 }
 
 step_collect() {
-    local brs sts
+    local brs sts defname
     while true; do
-        VMID=$(ui_input "공통단계 정보수집 (1/10)" "VMID 를 입력하세요." "$VMID") || return 2
+        VMID=$(ui_input "공통단계 정보수집 (1/11)" "VMID 를 입력하세요." "$VMID") || return 2
 
-        CPUTYPE=$(ui_menu "공통단계 정보수집 (2/10)" "CPU Type 을 선택하세요." \
+        # 이미 입력한 이름이 있으면 그대로, 없으면 VMID 기반 기본값을 채워 준다.
+        defname="${VMNAME:-ubuntu-2604-$VMID}"
+        VMNAME=$(ui_input "공통단계 정보수집 (2/11)" \
+            "VM Name 을 입력하세요. (예: ubuntu-2604-$VMID)" "$defname") || return 2
+
+        CPUTYPE=$(ui_menu "공통단계 정보수집 (3/11)" "CPU Type 을 선택하세요." \
             "host"          "물리 CPU 그대로 노출 (단일 노드 권장)" \
             "x86-64-v3"     "Haswell 이후 공통 기능 (마이그레이션용)" \
             "x86-64-v2-AES" "Nehalem 이후 + AES" \
             "kvm64"         "최대 호환, 성능 낮음") || return 2
 
-        CORES=$(ui_input   "공통단계 정보수집 (3/10)" "Cores 를 입력하세요." "$CORES") || return 2
-        MEMORY=$(ui_input  "공통단계 정보수집 (4/10)" "Memory 를 MiB 단위로 입력하세요." "$MEMORY") || return 2
-        IPADDR=$(ui_input  "공통단계 정보수집 (5/10)" "IP 를 입력하세요. (예: 192.168.0.50)" "$IPADDR") || return 2
-        SUBNETBIT=$(ui_input "공통단계 정보수집 (6/10)" "Subnet Bit 를 입력하세요. (예: 24)" "$SUBNETBIT") || return 2
-        GATEWAY=$(ui_input "공통단계 정보수집 (7/10)" "Gateway IP 를 입력하세요." "$GATEWAY") || return 2
+        CORES=$(ui_input   "공통단계 정보수집 (4/11)" "Cores 를 입력하세요." "$CORES") || return 2
+        MEMORY=$(ui_input  "공통단계 정보수집 (5/11)" "Memory 를 MiB 단위로 입력하세요." "$MEMORY") || return 2
+        IPADDR=$(ui_input  "공통단계 정보수집 (6/11)" "IP 를 입력하세요. (예: 192.168.0.50)" "$IPADDR") || return 2
+        SUBNETBIT=$(ui_input "공통단계 정보수집 (7/11)" "Subnet Bit 를 입력하세요. (예: 24)" "$SUBNETBIT") || return 2
+        GATEWAY=$(ui_input "공통단계 정보수집 (8/11)" "Gateway IP 를 입력하세요." "$GATEWAY") || return 2
 
         brs=$(list_bridges)
         if [[ -n "$brs" ]]; then
-            BRIDGE=$(pick_from_list "공통단계 정보수집 (8/10)" "Bridge 를 선택하세요." "$brs") || return 2
+            BRIDGE=$(pick_from_list "공통단계 정보수집 (9/11)" "Bridge 를 선택하세요." "$brs") || return 2
         else
-            BRIDGE=$(ui_input "공통단계 정보수집 (8/10)" "Bridge 를 입력하세요." "vmbr0") || return 2
+            BRIDGE=$(ui_input "공통단계 정보수집 (9/11)" "Bridge 를 입력하세요." "vmbr0") || return 2
         fi
 
-        DISKSIZE=$(ui_input "공통단계 정보수집 (9/10)" "Disk Size 를 GiB 단위로 입력하세요." "$DISKSIZE") || return 2
+        DISKSIZE=$(ui_input "공통단계 정보수집 (10/11)" "Disk Size 를 GiB 단위로 입력하세요." "$DISKSIZE") || return 2
 
         sts=$(list_storages images)
         if [[ -z "$sts" ]]; then
             ui_err "오류" "VM 디스크를 둘 수 있는 스토리지가 없습니다."
             return 2
         fi
-        DISKAREA=$(pick_from_list "공통단계 정보수집 (10/10)" "Disk Area 를 선택하세요." "$sts") || return 2
+        DISKAREA=$(pick_from_list "공통단계 정보수집 (11/11)" "Disk Area 를 선택하세요." "$sts") || return 2
 
         ROOTPW=$(ui_passwd "Root Password" "root 계정 비밀번호를 입력하세요.") || return 2
 
         validate_input || continue
 
-        log "정보수집: VMID=$VMID CPU=$CPUTYPE cores=$CORES mem=$MEMORY ip=$IPADDR/$SUBNETBIT gw=$GATEWAY br=$BRIDGE disk=${DISKSIZE}G area=$DISKAREA"
+        log "정보수집: VMID=$VMID name=$VMNAME CPU=$CPUTYPE cores=$CORES mem=$MEMORY ip=$IPADDR/$SUBNETBIT gw=$GATEWAY br=$BRIDGE disk=${DISKSIZE}G area=$DISKAREA"
         if ui_yesno "입력 확인" "\
 VMID        : $VMID
+VM Name     : $VMNAME
 CPU Type    : $CPUTYPE
 Cores       : $CORES
 Memory      : $MEMORY MiB
@@ -344,7 +354,7 @@ step_yaml() {
 # ---------------------------------------------------------------- 5단계: VM 생성
 vm_commands() {
     cat <<EOS
-qm create $VMID --name ubuntu-2604-$VMID --memory $MEMORY --cores $CORES --sockets 1 --cpu $CPUTYPE --net0 virtio,bridge=$BRIDGE --scsihw virtio-scsi-single --ostype l26 --vga std --agent enabled=1
+qm create $VMID --name $VMNAME --memory $MEMORY --cores $CORES --sockets 1 --cpu $CPUTYPE --net0 virtio,bridge=$BRIDGE --scsihw virtio-scsi-single --ostype l26 --vga std --agent enabled=1
 qm set $VMID --virtio0 $DISKAREA:0,import-from=$IMG_PATH
 qm disk resize $VMID virtio0 ${DISKSIZE}G
 qm set $VMID --ide2 $DISKAREA:cloudinit
@@ -388,7 +398,7 @@ $(vm_commands)
                                --gauge "VM 을 생성하는 중입니다..." 10 70 0
     if [[ ${PIPESTATUS[0]} -eq 0 ]]; then
         log "VM $VMID 생성 완료"
-        ui_msg "완료" "설치가 완료되었습니다.\n\nVMID : $VMID\nIP   : $IPADDR/$SUBNETBIT\n로그 : $LOG_FILE"
+        ui_msg "완료" "설치가 완료되었습니다.\n\nVMID : $VMID\nName : $VMNAME\nIP   : $IPADDR/$SUBNETBIT\n로그 : $LOG_FILE"
     else
         ui_err "실패" "설치가 실패하였습니다.\n\n$(cat "$TMP_ERR")\n\n로그: $LOG_FILE"
     fi
